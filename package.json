@@ -1,0 +1,19 @@
+{
+  "name": "agent-map",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Live visualizer for Claude Code multi-agent workflows",
+  "type": "commonjs",
+  "main": "server/index.js",
+  "bin": {
+    "agent-map": "bin/dump-run.js"
+  },
+  "scripts": {
+    "dump": "node bin/dump-run.js",
+    "start": "node server/index.js",
+    "test": "node --test server/__tests__/*.test.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

@@ -11,6 +11,8 @@ const state = {
   source: null,
   transform: { x: 0, y: 0, k: 1 },
   fitPending: false,
+  focusDrawer: false,
+  restoreAgentId: null,
 };
 
 // ── formatting ────────────────────────────────────────────────────────────
@@ -20,6 +22,8 @@ const fmtTokens = (n) =>
 
 const fmtUsd = (n) =>
   n == null ? "—" : n >= 10 ? `$${n.toFixed(2)}` : n >= 0.01 ? `$${n.toFixed(2)}` : `$${n.toFixed(4)}`;
+
+const fmtCost = (n, unpriced = false) => (unpriced ? "unpriced" : fmtUsd(n));
 
 function fmtDur(ms) {
   if (!Number.isFinite(ms) || ms < 0) return "—";
@@ -85,6 +89,28 @@ function el(name, attrs = {}, ...kids) {
     n.appendChild(typeof kid === "string" ? document.createTextNode(kid) : kid);
   }
   return n;
+}
+
+function makeAgentInteractive(g, agent) {
+  g.dataset.agentId = agent.id;
+  g.setAttribute("role", "button");
+  g.setAttribute("tabindex", "0");
+  g.setAttribute(
+    "aria-label",
+    `${agent.name}, ${agent.status}, ${modelShort(agent.model)}, ${fmtTokens(agent.tokens.total)} tokens`,
+  );
+  g.appendChild(el("title", {}, `${agent.name} — ${agent.activity || agent.status}`));
+  g.addEventListener("click", (event) => {
+    if (suppressCanvasClick) return;
+    event.stopPropagation();
+    select(agent.id, true);
+  });
+  g.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    event.stopPropagation();
+    select(agent.id, true);
+  });
 }
 
 // ── tree ordering, shared by every view ───────────────────────────────────
@@ -179,6 +205,7 @@ function renderTree(graph, root) {
       class: `node${a.id === state.selectedId ? " sel" : ""}`,
       transform: `translate(${x},${y})`,
     });
+    makeAgentInteractive(g, a);
     g.appendChild(el("rect", { class: "node-card", width: NODE_W, height: NODE_H }));
     // Model identity as a coloured spine on the left edge of the card.
     g.appendChild(
@@ -199,13 +226,9 @@ function renderTree(graph, root) {
       el(
         "text",
         { class: "node-meta", x: 12, y: 49 },
-        `${modelShort(a.model)} · ${fmtTokens(a.tokens.total)} · ${fmtUsd(a.unpricedModel ? null : a.costUsd)}`,
+        `${modelShort(a.model)} · ${fmtTokens(a.tokens.total)} · ${fmtCost(a.costUsd, a.unpricedModel)}`,
       ),
     );
-    g.addEventListener("click", (e) => {
-      e.stopPropagation();
-      select(a.id);
-    });
     root.appendChild(g);
   }
 }
@@ -248,6 +271,7 @@ function renderTimeline(graph, root) {
       class: `node${a.id === state.selectedId ? " sel" : ""}`,
       transform: `translate(0,${y})`,
     });
+    makeAgentInteractive(g, a);
     g.appendChild(
       el(
         "text",
@@ -275,10 +299,6 @@ function renderTimeline(graph, root) {
         `${fmtTokens(a.tokens.total)} · ${fmtDur(a.activeMs)}`,
       ),
     );
-    g.addEventListener("click", (e) => {
-      e.stopPropagation();
-      select(a.id);
-    });
     root.appendChild(g);
   });
 }
@@ -304,16 +324,13 @@ function renderSequence(graph, root) {
       el("line", { class: "lifeline", x1: x, y1: SEQ_TOP, x2: x, y2: SEQ_TOP + SEQ_H }),
     );
     const g = el("g", { class: "node", transform: `translate(${x - 59},0)` });
+    makeAgentInteractive(g, a);
     g.appendChild(el("rect", { class: "node-card", width: 118, height: 44 }));
     g.appendChild(
       el("rect", { x: 0, y: 0, width: 3, height: 44, fill: modelColor(a.model), rx: 1.5 }),
     );
     g.appendChild(el("text", { class: "node-name", x: 10, y: 19 }, clip(a.name, 13)));
     g.appendChild(el("text", { class: "node-meta", x: 10, y: 34 }, modelShort(a.model)));
-    g.addEventListener("click", (e) => {
-      e.stopPropagation();
-      select(a.id);
-    });
     root.appendChild(g);
   });
 
@@ -399,20 +416,36 @@ function fit() {
 }
 
 let drag = null;
-canvas.addEventListener("mousedown", (e) => {
-  drag = { x: e.clientX, y: e.clientY, tx: state.transform.x, ty: state.transform.y };
+let suppressCanvasClick = false;
+canvas.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0) return;
+  drag = {
+    pointerId: e.pointerId,
+    x: e.clientX,
+    y: e.clientY,
+    tx: state.transform.x,
+    ty: state.transform.y,
+    moved: false,
+  };
+  canvas.setPointerCapture(e.pointerId);
   canvas.classList.add("dragging");
 });
-window.addEventListener("mousemove", (e) => {
-  if (!drag) return;
+canvas.addEventListener("pointermove", (e) => {
+  if (!drag || drag.pointerId !== e.pointerId) return;
+  if (Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y) > 3) drag.moved = true;
   state.transform.x = drag.tx + (e.clientX - drag.x);
   state.transform.y = drag.ty + (e.clientY - drag.y);
   applyTransform();
 });
-window.addEventListener("mouseup", () => {
+const endDrag = (e) => {
+  if (!drag || drag.pointerId !== e.pointerId) return;
+  suppressCanvasClick = drag.moved;
+  if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
   drag = null;
   canvas.classList.remove("dragging");
-});
+};
+canvas.addEventListener("pointerup", endDrag);
+canvas.addEventListener("pointercancel", endDrag);
 
 canvas.addEventListener(
   "wheel",
@@ -432,8 +465,30 @@ canvas.addEventListener(
   { passive: false },
 );
 
-canvas.addEventListener("click", () => select(null));
+canvas.addEventListener("click", () => {
+  if (suppressCanvasClick) {
+    suppressCanvasClick = false;
+    return;
+  }
+  select(null);
+});
 document.getElementById("fit").addEventListener("click", fit);
+
+function zoomBy(factor) {
+  if (!state.graph) return;
+  const r = canvas.getBoundingClientRect();
+  const mx = r.width / 2;
+  const my = r.height / 2;
+  const previous = state.transform.k;
+  const k = Math.min(3, Math.max(0.08, previous * factor));
+  state.transform.x = mx - ((mx - state.transform.x) * k) / previous;
+  state.transform.y = my - ((my - state.transform.y) * k) / previous;
+  state.transform.k = k;
+  applyTransform();
+}
+
+document.getElementById("zoom-in").addEventListener("click", () => zoomBy(1.2));
+document.getElementById("zoom-out").addEventListener("click", () => zoomBy(1 / 1.2));
 
 // ── render orchestration ──────────────────────────────────────────────────
 
@@ -500,15 +555,24 @@ function renderLegend(g) {
 
 // ── drawer ────────────────────────────────────────────────────────────────
 
-function select(id) {
+function select(id, focusDrawer = false) {
+  const closing = !id || id === state.selectedId;
+  if (!closing) state.restoreAgentId = id;
   state.selectedId = id === state.selectedId ? null : id;
+  state.focusDrawer = !closing && focusDrawer;
   render();
+  if (closing && state.restoreAgentId) {
+    requestAnimationFrame(() => {
+      document.querySelector(`[data-agent-id="${CSS.escape(state.restoreAgentId)}"]`)?.focus();
+    });
+  }
 }
 
 function renderDrawer() {
   const drawer = document.getElementById("drawer");
   const a = state.graph?.agents.find((x) => x.id === state.selectedId);
   if (!a) {
+    state.selectedId = null;
     drawer.hidden = true;
     return;
   }
@@ -524,7 +588,7 @@ function renderDrawer() {
   const rows = [
     ["status", a.status],
     ["tokens", fmtTokens(a.tokens.total)],
-    ["cost", fmtUsd(a.unpricedModel ? null : a.costUsd)],
+    ["cost", fmtCost(a.costUsd, a.unpricedModel)],
     ["duration", fmtDur(a.activeMs)],
     ["tool calls", a.toolCalls],
     ["subtree", `${a.subtree.agents} agents · ${fmtUsd(a.subtree.costUsd)}`],
@@ -574,6 +638,11 @@ function renderDrawer() {
   }
 
   document.getElementById("d-prompt").textContent = a.prompt || "—";
+
+  if (state.focusDrawer) {
+    state.focusDrawer = false;
+    requestAnimationFrame(() => document.getElementById("drawer-close").focus());
+  }
 }
 
 document.getElementById("drawer-close").addEventListener("click", () => select(null));
@@ -591,7 +660,10 @@ function sessionButton(s, index) {
 
   const proj = document.createElement("span");
   proj.className = "proj";
-  proj.textContent = s.project.replace(/^-/, "").replace(/-/g, "/");
+  const projectPath = s.project.replace(/^-/, "").replace(/-/g, "/");
+  proj.textContent = projectPath.includes("/projects/")
+    ? projectPath.split("/projects/").pop()
+    : projectPath.split("/").filter(Boolean).pop() || "unknown project";
 
   const when = document.createElement("span");
   when.className = "when";
@@ -618,8 +690,15 @@ function sessionButton(s, index) {
 async function loadSessions() {
   let data;
   try {
-    data = await (await fetch("/api/sessions")).json();
+    const response = await fetch("/api/sessions");
+    if (!response.ok) throw new Error(`session index returned ${response.status}`);
+    data = await response.json();
+    if (!Array.isArray(data.active) || !Array.isArray(data.recent)) {
+      throw new Error("session index is malformed");
+    }
   } catch {
+    if (!state.graph) showPlaceholder("INDEX ERROR", "Run index unavailable.", "Agent Map could not read the local session index. Check the server output and retry.", true);
+    setConn(false, "index error", "error");
     return;
   }
   const activeList = document.getElementById("sessions-active");
@@ -634,10 +713,24 @@ async function loadSessions() {
   if (!state.sessionId && data.active.length) openSession(data.active[0].sessionId);
 }
 
-function setConn(on, label) {
+function setConn(on, label, kind = "") {
   const c = document.getElementById("conn");
   c.classList.toggle("on", on);
+  c.classList.toggle("warn", kind === "warn");
+  c.classList.toggle("error", kind === "error");
   c.querySelector("em").textContent = label;
+}
+
+function showPlaceholder(index, title, copy, error = false) {
+  state.graph = null;
+  viewport.replaceChildren();
+  const placeholder = document.getElementById("placeholder");
+  placeholder.hidden = false;
+  placeholder.classList.toggle("error", error);
+  document.querySelector(".canvas-hint").hidden = true;
+  document.getElementById("placeholder-index").textContent = index;
+  document.getElementById("placeholder-title").textContent = title;
+  document.getElementById("placeholder-copy").textContent = copy;
 }
 
 function openSession(sessionId) {
@@ -651,39 +744,77 @@ function openSession(sessionId) {
   state.source = src;
 
   src.addEventListener("graph", (e) => {
-    const g = JSON.parse(e.data);
+    if (src !== state.source) return;
+    let g;
+    try {
+      g = JSON.parse(e.data);
+    } catch {
+      showPlaceholder("STREAM ERROR", "The live update was malformed.", "The selected run remains untouched. Agent Map rejected an invalid server event.", true);
+      setConn(false, "stream error", "error");
+      return;
+    }
     if (g.error) {
-      setConn(false, "error");
+      showPlaceholder("RUN ERROR", "This run could not be reconstructed.", g.error, true);
+      setConn(false, "run error", "error");
+      return;
+    }
+    if (!Array.isArray(g.agents) || !g.agents.length) {
+      showPlaceholder("EMPTY RUN", "No agents were found.", "The selected transcript did not produce a valid run graph.", true);
+      setConn(false, "empty", "warn");
       return;
     }
     state.graph = g;
     setConn(g.status === "running", g.status === "running" ? "live" : "connected");
     render();
   });
-  src.onerror = () => setConn(false, "reconnecting");
+  src.onerror = () => {
+    if (src === state.source) setConn(false, "reconnecting", "warn");
+  };
 
   loadSessions();
 }
 
 // ── tabs ──────────────────────────────────────────────────────────────────
 
-for (const btn of document.querySelectorAll('[role="tab"]')) {
+const tabs = [...document.querySelectorAll('[role="tab"]')];
+
+function activateTab(btn) {
+  tabs.forEach((tab) => {
+    tab.classList.remove("on");
+    tab.setAttribute("aria-selected", "false");
+    tab.setAttribute("tabindex", "-1");
+  });
+  btn.classList.add("on");
+  btn.setAttribute("aria-selected", "true");
+  btn.setAttribute("tabindex", "0");
+  state.view = btn.dataset.view;
+  state.fitPending = true;
+  render();
+}
+
+for (const btn of tabs) {
   btn.addEventListener("click", () => {
-    document.querySelectorAll('[role="tab"]').forEach((b) => {
-      b.classList.remove("on");
-      b.setAttribute("aria-selected", "false");
-    });
-    btn.classList.add("on");
-    btn.setAttribute("aria-selected", "true");
-    state.view = btn.dataset.view;
-    state.fitPending = true;
-    render();
+    activateTab(btn);
+  });
+  btn.addEventListener("keydown", (event) => {
+    const current = tabs.indexOf(btn);
+    let next = null;
+    if (event.key === "ArrowRight") next = (current + 1) % tabs.length;
+    if (event.key === "ArrowLeft") next = (current - 1 + tabs.length) % tabs.length;
+    if (event.key === "Home") next = 0;
+    if (event.key === "End") next = tabs.length - 1;
+    if (next === null) return;
+    event.preventDefault();
+    activateTab(tabs[next]);
+    tabs[next].focus();
   });
 }
 
+tabs.slice(1).forEach((tab) => tab.setAttribute("tabindex", "-1"));
+
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") select(null);
-  if (e.key === "f") fit();
+  if (e.key.toLowerCase() === "f" && !e.metaKey && !e.ctrlKey && !e.altKey) fit();
 });
 
 loadSessions();

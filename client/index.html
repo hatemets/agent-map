@@ -84,11 +84,11 @@
           <g id="viewport"></g>
         </svg>
         <p class="canvas-hint" aria-hidden="true">Drag to pan <i></i> Scroll to zoom</p>
-        <div class="placeholder" id="placeholder">
+        <div class="placeholder" id="placeholder" role="status" aria-live="polite">
           <span class="placeholder-map" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
-          <p class="placeholder-index">NO RUN / 000</p>
-          <h2>Select a run to reconstruct the field.</h2>
-          <p>Every agent, handoff, message, token and dollar—from one canonical graph.</p>
+          <p class="placeholder-index" id="placeholder-index">NO RUN / 000</p>
+          <h2 id="placeholder-title">Select a run to reconstruct the field.</h2>
+          <p id="placeholder-copy">Every agent, handoff, message, token and dollar—from one canonical graph.</p>
         </div>
       </div>
     </main>

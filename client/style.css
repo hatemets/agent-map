@@ -214,6 +214,8 @@ kbd { padding: 1px 3px; border: 1px solid var(--line); color: var(--ink-faint); 
 .placeholder-index { margin: 0 0 9px; color: var(--copper); font-family: var(--mono); font-size: 8px; letter-spacing: 0.16em; }
 .placeholder h2 { max-width: 520px; margin: 0; font-family: var(--display); font-size: clamp(24px, 3vw, 38px); font-weight: 500; letter-spacing: -0.045em; line-height: 1.12; }
 .placeholder > p:last-child { max-width: 460px; margin: 12px 0 0; color: var(--ink-faint); font-family: var(--mono); font-size: 9px; line-height: 1.7; }
+.placeholder.error .placeholder-index { color: var(--fail); }
+.placeholder.error .placeholder-map { filter: grayscale(1); opacity: 0.55; }
 
 /* SVG presentation. */
 .link { fill: none; stroke: #55544b; stroke-width: 1.1; }
@@ -283,9 +285,9 @@ kbd { padding: 1px 3px; border: 1px solid var(--line); color: var(--ink-faint); 
   .brand-mark { width: 28px; height: 28px; transform: scale(0.8); transform-origin: left center; }
   .brand-copy { font-size: 19px; }
   .rail-sub, .rail-foot { display: none; }
-  .rail-scroll { display: flex; gap: 18px; overflow-x: auto; padding: 10px 12px 12px; }
-  .rail-group { min-width: 220px; margin: 0; }
-  .sessions { display: flex; gap: 4px; }
+  .rail-scroll { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; overflow: hidden; padding: 10px 12px 12px; }
+  .rail-group { min-width: 0; margin: 0; overflow: hidden; }
+  .sessions { display: flex; gap: 4px; overflow-x: auto; }
   .sessions li { min-width: 178px; }
   .sessions button { height: 100%; border: 1px solid var(--line); }
   .stage { min-height: 720px; }

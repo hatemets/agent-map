@@ -108,7 +108,7 @@ function main() {
   console.log(`project  ${graph.project}   ${graph.cwd || ""}`);
   console.log(`status   ${graph.status}   started ${graph.startedAt || "?"}`);
   console.log(
-    `totals   ${graph.totals.agents} agents · ${fmtTokens(graph.totals.tokens.total)} tokens · ${fmtUsd(graph.totals.costUsd)}`,
+    `totals   ${graph.totals.agents} agents · ${fmtTokens(graph.totals.tokens.total)} tokens · ${fmtUsd(graph.totals.unpriced ? null : graph.totals.costUsd)}`,
   );
   console.log(`parsed   ${fmtDuration(parseMs) || `${parseMs}ms`}\n`);
   printTree(graph);

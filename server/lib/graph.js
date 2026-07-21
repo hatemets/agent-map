@@ -536,14 +536,18 @@ function rollUp(id, nodes, childrenOf) {
   const tokens = cost.addTokens(cost.emptyTokens(), n.tokens);
   let usd = n.costUsd;
   let agents = 1;
+  let unpriced = n.unpricedModel;
   for (const childId of childrenOf.get(id) || []) {
     const sub = rollUp(childId, nodes, childrenOf);
     cost.addTokens(tokens, sub.tokens);
     usd += sub.costUsd;
     agents += sub.agents;
+    unpriced ||= sub.unpriced;
   }
-  n.subtree = { tokens, costUsd: usd, agents };
+  // costUsd retains the priced portion for diagnostics, while unpriced tells
+  // every consumer that presenting that partial sum as the total would lie.
+  n.subtree = { tokens, costUsd: usd, agents, unpriced };
   return n.subtree;
 }
 
-module.exports = { buildRunGraph, ROOT, STALE_MS };
+module.exports = { buildRunGraph, rollUp, ROOT, STALE_MS };

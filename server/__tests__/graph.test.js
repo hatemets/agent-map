@@ -12,7 +12,7 @@ const assert = require("node:assert");
 const fs = require("fs");
 const path = require("path");
 
-const { buildRunGraph, ROOT } = require("../lib/graph");
+const { buildRunGraph, rollUp, ROOT } = require("../lib/graph");
 const { findSession } = require("../lib/discovery");
 const cost = require("../lib/cost");
 const { promptKey, nameFromAgentId, unwrapTeammateMessage } = require("../lib/transcript");
@@ -78,6 +78,22 @@ test("short model aliases from spawn inputs resolve to real rates", () => {
     assert.ok(cost.isKnownModel(alias), `${alias} should price`);
   }
   assert.ok(cost.isKnownModel("claude-haiku-4-5-20251001"), "dated snapshot should price");
+});
+
+test("subtree rollups preserve unpriced cost uncertainty", () => {
+  const tokens = () => ({ ...cost.emptyTokens() });
+  const nodes = new Map([
+    [ROOT, { tokens: tokens(), costUsd: 1, unpricedModel: false }],
+    ["known", { tokens: tokens(), costUsd: 2, unpricedModel: false }],
+    ["unknown", { tokens: tokens(), costUsd: 0, unpricedModel: true }],
+  ]);
+  const children = new Map([[ROOT, ["known", "unknown"]]]);
+
+  const total = rollUp(ROOT, nodes, children);
+
+  assert.strictEqual(total.costUsd, 3, "priced portion remains available for diagnostics");
+  assert.strictEqual(total.unpriced, true, "consumer must not present the partial sum as total");
+  assert.strictEqual(total.agents, 3);
 });
 
 // ── golden: depth-2 nesting ──────────────────────────────────────────────────

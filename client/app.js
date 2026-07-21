@@ -532,7 +532,10 @@ function renderHeader(g) {
 
   document.getElementById("stat-agents").textContent = g.totals.agents;
   document.getElementById("stat-tokens").textContent = fmtTokens(g.totals.tokens.total);
-  document.getElementById("stat-cost").textContent = fmtUsd(g.totals.costUsd);
+  document.getElementById("stat-cost").textContent = fmtCost(
+    g.totals.costUsd,
+    g.totals.unpriced,
+  );
   document.getElementById("stat-elapsed").textContent = elapsed ? fmtDur(elapsed) : "—";
 }
 
@@ -591,7 +594,7 @@ function renderDrawer() {
     ["cost", fmtCost(a.costUsd, a.unpricedModel)],
     ["duration", fmtDur(a.activeMs)],
     ["tool calls", a.toolCalls],
-    ["subtree", `${a.subtree.agents} agents · ${fmtUsd(a.subtree.costUsd)}`],
+    ["subtree", `${a.subtree.agents} agents · ${fmtCost(a.subtree.costUsd, a.subtree.unpriced)}`],
   ];
   const dl = document.getElementById("d-stats");
   dl.replaceChildren();

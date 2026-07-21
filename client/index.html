@@ -3,89 +3,115 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#171714" />
     <title>Agent Map</title>
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
-    <aside class="rail">
+    <aside class="rail" aria-label="Run browser">
       <header class="rail-head">
         <a class="brand" href="/" aria-label="Agent Map home">
-          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-          <span>Agent Map</span>
+          <span class="brand-mark" aria-hidden="true">
+            <i></i><i></i><i></i><i></i>
+          </span>
+          <span class="brand-copy"><strong>Agent</strong><em>Map</em></span>
         </a>
-        <p class="rail-sub">Claude Code run explorer</p>
+        <p class="rail-sub">Codex run observatory</p>
       </header>
 
       <div class="rail-scroll">
         <section class="rail-group" id="group-active">
-          <div class="section-heading"><h2>Live now</h2><span>auto</span></div>
+          <div class="section-heading">
+            <h2>Live runs</h2>
+            <span id="active-count">00</span>
+          </div>
           <ul class="sessions" id="sessions-active"></ul>
-          <p class="rail-empty" id="active-empty">No session running.</p>
+          <p class="rail-empty" id="active-empty">No active runs detected.</p>
         </section>
 
         <section class="rail-group">
-          <div class="section-heading"><h2>Recent runs</h2><span>history</span></div>
+          <div class="section-heading">
+            <h2>Run archive</h2>
+            <span id="recent-count">00</span>
+          </div>
           <ul class="sessions" id="sessions-recent"></ul>
         </section>
       </div>
 
       <footer class="rail-foot">
-        <span class="conn" id="conn"><i></i><em>idle</em></span>
+        <span class="conn" id="conn" role="status" aria-live="polite"><i></i><em>idle</em></span>
+        <span class="local-only">127.0.0.1</span>
       </footer>
     </aside>
 
     <main class="stage">
       <header class="topbar">
         <div class="ident">
-          <p class="eyebrow">Run overview</p>
-          <h2 id="run-project">—</h2>
-          <p id="run-meta">select a session</p>
+          <div class="run-kicker">
+            <span class="run-index">RUN / <b id="run-index">—</b></span>
+            <span class="status-chip" id="run-status">Awaiting selection</span>
+          </div>
+          <h1 id="run-project">Choose a run</h1>
+          <p id="run-meta">Select a live or archived session from the run browser.</p>
         </div>
 
         <dl class="stats" id="stats">
-          <div><dt>agents</dt><dd id="stat-agents">—</dd></div>
-          <div><dt>tokens</dt><dd id="stat-tokens">—</dd></div>
-          <div><dt>cost</dt><dd id="stat-cost">—</dd></div>
-          <div><dt>elapsed</dt><dd id="stat-elapsed">—</dd></div>
+          <div><dt>Agents</dt><dd id="stat-agents">—</dd></div>
+          <div><dt>Tokens</dt><dd id="stat-tokens">—</dd></div>
+          <div><dt>Cost</dt><dd id="stat-cost">—</dd></div>
+          <div><dt>Elapsed</dt><dd id="stat-elapsed">—</dd></div>
         </dl>
       </header>
 
-      <nav class="tabs" role="tablist">
-        <button role="tab" data-view="tree" class="on" aria-selected="true">Map</button>
-        <button role="tab" data-view="timeline">Timeline</button>
-        <button role="tab" data-view="sequence">Messages</button>
-        <div class="tabs-spacer"></div>
-        <div class="legend" id="legend"></div>
-        <button class="ghost" id="fit" title="Fit map to view">Fit map</button>
+      <nav class="toolbar" aria-label="Run views and map controls">
+        <div class="tabs" role="tablist" aria-label="Run view">
+          <button role="tab" data-view="tree" class="on" aria-selected="true" aria-controls="canvas">Map</button>
+          <button role="tab" data-view="timeline" aria-selected="false" aria-controls="canvas">Timeline</button>
+          <button role="tab" data-view="sequence" aria-selected="false" aria-controls="canvas">Messages</button>
+        </div>
+        <div class="legend" id="legend" aria-label="Model legend"></div>
+        <div class="map-actions" aria-label="Map controls">
+          <button class="icon-button" id="zoom-out" aria-label="Zoom out" title="Zoom out">−</button>
+          <button class="icon-button" id="zoom-in" aria-label="Zoom in" title="Zoom in">+</button>
+          <button class="fit-button" id="fit" title="Fit map to view">Fit view <kbd>F</kbd></button>
+        </div>
       </nav>
 
-      <div class="canvas" id="canvas">
-        <svg id="svg" xmlns="http://www.w3.org/2000/svg">
+      <div class="canvas" id="canvas" role="tabpanel" tabindex="0" aria-label="Agent run map">
+        <div class="plot-ruler plot-ruler-x" aria-hidden="true"><span>00</span><span>25</span><span>50</span><span>75</span><span>100</span></div>
+        <div class="plot-ruler plot-ruler-y" aria-hidden="true"><span>A</span><span>B</span><span>C</span><span>D</span></div>
+        <svg id="svg" xmlns="http://www.w3.org/2000/svg" aria-label="Agent graph">
           <g id="viewport"></g>
         </svg>
-        <p class="canvas-hint" aria-hidden="true">Drag to pan · Scroll to zoom</p>
+        <p class="canvas-hint" aria-hidden="true">Drag to pan <i></i> Scroll to zoom</p>
         <div class="placeholder" id="placeholder">
-          <span class="placeholder-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-          <h3>Select a run</h3>
-          <p>Choose a live or recent session to inspect its agent work.</p>
+          <span class="placeholder-map" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+          <p class="placeholder-index">NO RUN / 000</p>
+          <h2>Select a run to reconstruct the field.</h2>
+          <p>Every agent, handoff, message, token and dollar—from one canonical graph.</p>
         </div>
       </div>
     </main>
 
-    <aside class="drawer" id="drawer" hidden>
-      <button class="drawer-close" id="drawer-close" aria-label="Close">×</button>
-      <h3 id="d-name">—</h3>
-      <p class="d-sub" id="d-sub">—</p>
+    <aside class="drawer" id="drawer" aria-label="Agent details" hidden>
+      <header class="drawer-head">
+        <p>Agent record</p>
+        <button class="drawer-close" id="drawer-close" aria-label="Close agent details" title="Close agent details">×</button>
+      </header>
+      <div class="drawer-title">
+        <span id="d-status" aria-hidden="true"></span>
+        <div><h2 id="d-name">—</h2><p class="d-sub" id="d-sub">—</p></div>
+      </div>
 
       <dl class="d-stats" id="d-stats"></dl>
 
       <section class="d-section">
-        <h4>Token breakdown</h4>
+        <h3><span>01</span> Token distribution</h3>
         <div class="bars" id="d-bars"></div>
       </section>
 
-      <section class="d-section">
-        <h4>Prompt</h4>
+      <section class="d-section prompt-section">
+        <h3><span>02</span> Dispatch prompt</h3>
         <pre id="d-prompt">—</pre>
       </section>
     </aside>

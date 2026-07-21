@@ -462,9 +462,13 @@ function render() {
 function renderHeader(g) {
   document.getElementById("run-project").textContent =
     (g.cwd || g.project || "").split("/").pop() || g.project;
+  document.getElementById("run-index").textContent = g.sessionId.slice(0, 8).toUpperCase();
+  const status = document.getElementById("run-status");
+  status.textContent = g.status;
+  status.className = `status-chip ${g.status}`;
   const started = g.startedAt ? new Date(g.startedAt).toLocaleString() : "—";
   document.getElementById("run-meta").textContent =
-    `${g.status} · ${g.gitBranch || "no branch"} · started ${started}`;
+    `${g.gitBranch || "no branch"}  /  started ${started}`;
 
   const elapsed =
     g.startedAt && (g.endedAt || g.status === "running")
@@ -511,6 +515,9 @@ function renderDrawer() {
   drawer.hidden = false;
 
   document.getElementById("d-name").textContent = a.name;
+  const statusMark = document.getElementById("d-status");
+  statusMark.style.color = statusColor(a.status);
+  statusMark.title = a.status;
   document.getElementById("d-sub").textContent =
     `${a.subagentType || a.nameSource} · ${a.model || "unknown model"}${a.effort ? ` · ${a.effort} effort` : ""}`;
 
@@ -525,12 +532,14 @@ function renderDrawer() {
   const dl = document.getElementById("d-stats");
   dl.replaceChildren();
   for (const [k, v] of rows) {
+    const cell = document.createElement("div");
     const dt = document.createElement("dt");
     dt.textContent = k;
     const dd = document.createElement("dd");
     dd.textContent = v;
     if (k === "status") dd.style.color = statusColor(a.status);
-    dl.append(dt, dd);
+    cell.append(dt, dd);
+    dl.appendChild(cell);
   }
 
   // Cache-aware breakdown — the whole point is showing that cache reads
@@ -571,10 +580,14 @@ document.getElementById("drawer-close").addEventListener("click", () => select(n
 
 // ── sessions + live feed ──────────────────────────────────────────────────
 
-function sessionButton(s) {
+function sessionButton(s, index) {
   const li = document.createElement("li");
   const b = document.createElement("button");
+  b.dataset.index = String(index + 1).padStart(2, "0");
   if (s.sessionId === state.sessionId) b.classList.add("on");
+
+  const copy = document.createElement("span");
+  copy.className = "session-copy";
 
   const proj = document.createElement("span");
   proj.className = "proj";
@@ -588,8 +601,15 @@ function sessionButton(s) {
     when.appendChild(dot);
   }
   when.append(document.createTextNode(`${fmtAgo(s.updatedAt)} · ${s.sessionId.slice(0, 8)}`));
+  if (s.hasSubagents) {
+    const agents = document.createElement("span");
+    agents.className = "has-agents";
+    agents.textContent = " / agents";
+    when.appendChild(agents);
+  }
 
-  b.append(proj, when);
+  copy.append(proj, when);
+  b.appendChild(copy);
   b.addEventListener("click", () => openSession(s.sessionId));
   li.appendChild(b);
   return li;
@@ -606,6 +626,8 @@ async function loadSessions() {
   const recentList = document.getElementById("sessions-recent");
   activeList.replaceChildren(...data.active.map(sessionButton));
   recentList.replaceChildren(...data.recent.map(sessionButton));
+  document.getElementById("active-count").textContent = String(data.active.length).padStart(2, "0");
+  document.getElementById("recent-count").textContent = String(data.recent.length).padStart(2, "0");
   document.getElementById("active-empty").hidden = data.active.length > 0;
 
   // Auto-open the newest live session on first load.

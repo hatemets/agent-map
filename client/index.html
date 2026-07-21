@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent Map</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <aside class="rail">
+      <header class="rail-head">
+        <a class="brand" href="/" aria-label="Agent Map home">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span>Agent Map</span>
+        </a>
+        <p class="rail-sub">Claude Code run explorer</p>
+      </header>
+
+      <div class="rail-scroll">
+        <section class="rail-group" id="group-active">
+          <div class="section-heading"><h2>Live now</h2><span>auto</span></div>
+          <ul class="sessions" id="sessions-active"></ul>
+          <p class="rail-empty" id="active-empty">No session running.</p>
+        </section>
+
+        <section class="rail-group">
+          <div class="section-heading"><h2>Recent runs</h2><span>history</span></div>
+          <ul class="sessions" id="sessions-recent"></ul>
+        </section>
+      </div>
+
+      <footer class="rail-foot">
+        <span class="conn" id="conn"><i></i><em>idle</em></span>
+      </footer>
+    </aside>
+
+    <main class="stage">
+      <header class="topbar">
+        <div class="ident">
+          <p class="eyebrow">Run overview</p>
+          <h2 id="run-project">—</h2>
+          <p id="run-meta">select a session</p>
+        </div>
+
+        <dl class="stats" id="stats">
+          <div><dt>agents</dt><dd id="stat-agents">—</dd></div>
+          <div><dt>tokens</dt><dd id="stat-tokens">—</dd></div>
+          <div><dt>cost</dt><dd id="stat-cost">—</dd></div>
+          <div><dt>elapsed</dt><dd id="stat-elapsed">—</dd></div>
+        </dl>
+      </header>
+
+      <nav class="tabs" role="tablist">
+        <button role="tab" data-view="tree" class="on" aria-selected="true">Map</button>
+        <button role="tab" data-view="timeline">Timeline</button>
+        <button role="tab" data-view="sequence">Messages</button>
+        <div class="tabs-spacer"></div>
+        <div class="legend" id="legend"></div>
+        <button class="ghost" id="fit" title="Fit map to view">Fit map</button>
+      </nav>
+
+      <div class="canvas" id="canvas">
+        <svg id="svg" xmlns="http://www.w3.org/2000/svg">
+          <g id="viewport"></g>
+        </svg>
+        <p class="canvas-hint" aria-hidden="true">Drag to pan · Scroll to zoom</p>
+        <div class="placeholder" id="placeholder">
+          <span class="placeholder-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+          <h3>Select a run</h3>
+          <p>Choose a live or recent session to inspect its agent work.</p>
+        </div>
+      </div>
+    </main>
+
+    <aside class="drawer" id="drawer" hidden>
+      <button class="drawer-close" id="drawer-close" aria-label="Close">×</button>
+      <h3 id="d-name">—</h3>
+      <p class="d-sub" id="d-sub">—</p>
+
+      <dl class="d-stats" id="d-stats"></dl>
+
+      <section class="d-section">
+        <h4>Token breakdown</h4>
+        <div class="bars" id="d-bars"></div>
+      </section>
+
+      <section class="d-section">
+        <h4>Prompt</h4>
+        <pre id="d-prompt">—</pre>
+      </section>
+    </aside>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

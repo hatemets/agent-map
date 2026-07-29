@@ -12,10 +12,15 @@ const assert = require("node:assert");
 const fs = require("fs");
 const path = require("path");
 
-const { buildRunGraph, rollUp, ROOT } = require("../lib/graph");
+const { buildRunGraph, resolveName, rollUp, roleLabelForText, ROOT } = require("../lib/graph");
 const { findSession } = require("../lib/discovery");
 const cost = require("../lib/cost");
-const { promptKey, nameFromAgentId, unwrapTeammateMessage } = require("../lib/transcript");
+const {
+  promptKey,
+  nameFromAgentId,
+  unwrapTeammateMessage,
+  sessionTitleFromRecords,
+} = require("../lib/transcript");
 
 const NESTED = "7e266487-ea02-44a0-8662-9ca858ef4cc2";
 const WORKFLOW = "384cd286-fcc9-4fcc-ba42-65c1082273c5";
@@ -60,6 +65,64 @@ test("promptKey strips the teammate envelope so named agents join", () => {
 test("nameFromAgentId separates named agents from anonymous ones", () => {
   assert.strictEqual(nameFromAgentId("attm-fetcher-75f9ec8c23403fb4"), "ttm-fetcher");
   assert.strictEqual(nameFromAgentId("a2c6a9df6532e96e2"), null);
+});
+
+test("sidebar session titles use the first actionable user request", () => {
+  const records = [
+    { type: "user", isMeta: true, message: { content: "<local-command-caveat>ignore</local-command-caveat>" } },
+    { type: "user", message: { content: "<command-name>/model</command-name><command-args></command-args>" } },
+    { type: "user", message: { content: "<command-name>/verify</command-name><command-args>the implementation of unstaged updates</command-args>" } },
+  ];
+  assert.strictEqual(
+    sessionTitleFromRecords(records),
+    "Verify: unstaged updates",
+  );
+  assert.strictEqual(
+    sessionTitleFromRecords([{ type: "user", message: { content: "pls check this err https://loom24.sentry.io/issues/1" } }]),
+    "Investigate Sentry error",
+  );
+  assert.strictEqual(
+    sessionTitleFromRecords([{ type: "user", message: { content: "<ide_opened_file>ignore</ide_opened_file>" } }]),
+    null,
+  );
+});
+
+test("agent task text resolves to concise role labels", () => {
+  const cases = [
+    ["You are a reconnaissance agent mapping the attack surface", "Reconnaissance Agent"],
+    ["Role: API authorization review", "Authorization Review"],
+    ["Trace root error boundary behaviour", "Debugger"],
+    ["Team lead coordinating the release", "Team Lead"],
+    ["Implement the run explorer", "Implementer"],
+    ["Verify the graph totals", "Verifier"],
+    ["Brainstorm useful product directions", "Ideator"],
+    ["ttm-fetcher", "Fetcher"],
+  ];
+  for (const [text, expected] of cases) {
+    assert.strictEqual(roleLabelForText(text), expected, text);
+  }
+  assert.strictEqual(roleLabelForText("general-purpose"), null);
+
+  const resolved = resolveName(
+    { agentId: "anonymous", records: [] },
+    { input: { subagent_type: "Explore", description: "Trace root error boundary behaviour" } },
+  );
+  assert.deepStrictEqual(resolved, { name: "Debugger", source: "role:description" });
+
+  assert.deepStrictEqual(
+    resolveName(
+      { agentId: "anonymous", records: [] },
+      { input: { name: "Reconnaissance Agent", description: "Map the attack surface" } },
+    ),
+    { name: "Reconnaissance Agent", source: "explicit" },
+  );
+  assert.deepStrictEqual(
+    resolveName(
+      { agentId: "anonymous", records: [] },
+      { input: { name: "Authenticated API Authorization Review Agent" } },
+    ),
+    { name: "Authenticated API Authorization Review", source: "explicit" },
+  );
 });
 
 test("cache tiers are priced at their documented multipliers", () => {
@@ -134,17 +197,15 @@ test("workflow session: every transcript appears exactly once", (t) => {
   assert.strictEqual(new Set(ids).size, ids.length, "no agent may be duplicated");
 });
 
-test("workflow session: named teammates keep their real names and models", (t) => {
+test("workflow session: named teammates receive concise roles and keep their models", (t) => {
   const graph = load(WORKFLOW);
   if (!graph) return t.skip("fixture session not present on this machine");
 
-  const fetcher = graph.agents.find((a) => a.name === "ttm-fetcher");
-  const digest = graph.agents.find((a) => a.name === "ttm-digest2");
-  assert.ok(fetcher, "ttm-fetcher should resolve by name");
-  assert.ok(digest, "ttm-digest2 should resolve by name");
-  // The spawn passed `name:`, so the name comes from the spawn input; the
-  // agentId-encoded name is the fallback when a spawn can't be matched.
-  assert.ok(["explicit", "filename"].includes(fetcher.nameSource), fetcher.nameSource);
+  const fetcher = graph.agents.find((a) => /^Fetcher(?: #\d+)?$/.test(a.name));
+  const digest = graph.agents.find((a) => /^Researcher(?: #\d+)?$/.test(a.name));
+  assert.ok(fetcher, "ttm-fetcher should resolve to Fetcher");
+  assert.ok(digest, "ttm-digest2 should resolve to Researcher");
+  assert.match(fetcher.nameSource, /^role:(explicit|filename)$/);
   assert.match(fetcher.model, /haiku/);
   assert.match(digest.model, /sonnet/);
 });

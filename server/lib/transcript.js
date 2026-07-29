@@ -16,6 +16,7 @@ const fs = require("fs");
 const path = require("path");
 
 const SPAWN_TOOLS = new Set(["Agent", "Task", "Workflow"]);
+const TITLE_PROBE_BYTES = 64 * 1024;
 
 /** Read a JSONL file into records, skipping any unparsable (e.g. partially written) line. */
 function readJsonl(file) {
@@ -35,6 +36,43 @@ function readJsonl(file) {
     }
   }
   return out;
+}
+
+/**
+ * Read only the complete JSONL records available in a small file prefix.
+ * Session discovery uses this for sidebar context, not graph construction: a
+ * run can be gigabytes, while its opening request normally arrives in the
+ * first few records. Dropping the last unterminated line keeps live reads safe.
+ */
+function readJsonlPrefix(file, maxBytes = TITLE_PROBE_BYTES) {
+  let fd;
+  try {
+    fd = fs.openSync(file, "r");
+    const buffer = Buffer.allocUnsafe(maxBytes);
+    const bytes = fs.readSync(fd, buffer, 0, maxBytes, 0);
+    const raw = buffer.toString("utf8", 0, bytes);
+    const complete = raw.slice(0, raw.lastIndexOf("\n"));
+    const records = [];
+    for (const line of complete.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        records.push(JSON.parse(line));
+      } catch {
+        // A live writer may leave a malformed record in the probe. Ignore it.
+      }
+    }
+    return records;
+  } catch {
+    return [];
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        /* raced with a filesystem failure */
+      }
+    }
+  }
 }
 
 /** Content blocks of a record's message, always as an array. */
@@ -67,6 +105,57 @@ function firstUserText(records) {
     if (t.trim()) return t;
   }
   return null;
+}
+
+/** Turn a user request into one short, filesystem-safe sidebar heading. */
+function sessionTitleFromRecords(records) {
+  for (const record of records) {
+    if (record.type !== "user" || record.isMeta) continue;
+    const text = textOf(record).trim();
+    if (!text) continue;
+
+    const commandName = /<command-name>\/?([^<\s]+)<\/command-name>/i.exec(text);
+    const commandArgs = /<command-args>([\s\S]*?)<\/command-args>/i.exec(text);
+    if (commandName && commandArgs) {
+      const name = commandName[1].trim();
+      const args = compactTitle(commandArgs[1])?.replace(/^(?:the )?implementation of\s+/i, "");
+      if (args && name !== "model") return `${capitalize(name)}: ${args}`;
+      continue;
+    }
+
+    // Harness bookkeeping, command output, images, and teammate chatter are
+    // context about the run, not the user's reason for opening it.
+    if (text.startsWith("<")) continue;
+    if (/^Another Claude session sent a message:/i.test(text)) continue;
+
+    const title = compactTitle(text);
+    if (title) return title;
+  }
+  return null;
+}
+
+function sessionTitleFromFile(file) {
+  return sessionTitleFromRecords(readJsonlPrefix(file));
+}
+
+function compactTitle(value, limit = 72) {
+  const text = String(value || "")
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/https?:\/\/\S+/gi, (url) => /sentry/i.test(url) ? "Sentry issue" : "link")
+    .replace(/\s+/g, " ")
+    .replace(/^\s*(?:please|pls|can you|could you)\s+/i, "")
+    .trim();
+  if (!text) return null;
+  if (/\b(?:err|error)\b/i.test(text) && /\bSentry issue\b/i.test(text)) {
+    return "Investigate Sentry error";
+  }
+  const sentence = text.split(/(?<=[.!?])\s/)[0].trim();
+  const title = sentence.length > limit ? `${sentence.slice(0, limit - 1).trimEnd()}…` : sentence;
+  return capitalize(title);
+}
+
+function capitalize(value) {
+  return value ? value[0].toUpperCase() + value.slice(1) : value;
 }
 
 /**
@@ -211,9 +300,12 @@ function readWorkflowJournal(sessionDir, runId) {
 module.exports = {
   SPAWN_TOOLS,
   readJsonl,
+  readJsonlPrefix,
   blocksOf,
   textOf,
   firstUserText,
+  sessionTitleFromRecords,
+  sessionTitleFromFile,
   unwrapTeammateMessage,
   promptKey,
   nameFromAgentId,

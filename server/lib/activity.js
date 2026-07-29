@@ -88,7 +88,7 @@ function phraseForTool(name, input = {}, extra = {}) {
  * Describe what an agent is doing right now (or what it did, if terminal).
  *
  * Priority:
- *   1. terminal status                 -> "Done - 12 tools, 3m40s"
+ *   1. terminal status                 -> "Done: 12 tools, 3m40s"
  *   2. waiting on running children     -> "Waiting on 2 children"
  *   3. last tool call                  -> "Reading scanner.py (4 files so far)"
  *   4. assistant text, no tool         -> "Thinking"
@@ -106,7 +106,7 @@ function describeActivity({
     const parts = [];
     if (toolCalls) parts.push(`${toolCalls} tool${toolCalls === 1 ? "" : "s"}`);
     if (dur) parts.push(dur);
-    const suffix = parts.length ? ` — ${parts.join(", ")}` : "";
+    const suffix = parts.length ? `: ${parts.join(", ")}` : "";
     return (status === "failed" ? "Failed" : "Done") + suffix;
   }
 
@@ -134,12 +134,12 @@ function describeActivity({
     if (status === "stalled") {
       // Never attach live elapsed time to a cold transcript — an interrupted
       // session from last month would read as "Running cd — 696h".
-      return `Stalled — last: ${phrase}`;
+      return `Stalled: last ${phrase}`;
     }
     // Long-running Bash reads better with elapsed time attached.
     if (lastTool.name === "Bash" && lastToolAt) {
       const elapsed = fmtDuration(now - Date.parse(lastToolAt));
-      if (elapsed) phrase += ` — ${elapsed}`;
+      if (elapsed) phrase += ` · ${elapsed}`;
     }
     return phrase;
   }

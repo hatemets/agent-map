@@ -169,44 +169,111 @@ function joinChildren({ transcripts, spawns, resultsByToolUse }) {
 
 // ── naming ───────────────────────────────────────────────────────────────────
 
-function resolveName(transcript, spawn) {
-  const explicit = spawn?.input?.name;
-  if (explicit) return { name: explicit, source: "explicit" };
+/**
+ * Agent titles identify a role, never the task sentence that spawned it. A
+ * transcript can still retain the full prompt for the detail drawer, but a
+ * graph is unreadable when every node is a differently truncated instruction.
+ */
+const MAX_NAME_WORDS = 4;
+const ROLE_LABELS = [
+  ["Reconnaissance Agent", /\b(?:reconnaissance|recon|enumerat|attack[\s_-]*surface|osint)\w*/i],
+  ["Exploit Validation", /\b(?:exploit|payload|penetrat|poc|proof[\s_-]*of[\s_-]*concept)\w*/i],
+  ["Authorization Review", /\b(?:authoriz|access[\s_-]*control|permission|privilege)\w*/i],
+  ["Security Auditor", /\b(?:security[\s_-]*(?:audit|review|scan)|pentest|vulnerabilit)\w*/i],
+  ["Team Lead", /\b(?:team[\s_-]*lead|lead[\s_-]*agent|orchestrat|coordinat|delegat)\w*/i],
+  ["Debugger", /\b(?:debug|diagnos|trace|root[\s_-]*cause|error[\s_-]*boundary|investigat)\w*/i],
+  ["Verifier", /\b(?:verif|validat|test|qa|review|audit|inspect|check)\w*/i],
+  ["Implementer", /\b(?:implement|build|code|develop|patch|fix|refactor)\w*/i],
+  ["Ideator", /\b(?:ideat|brainstorm|explor|propos|design|plan|strateg)\w*/i],
+  ["Researcher", /\b(?:research|analys|source|search|gather|collect|digest)\w*/i],
+  ["Writer", /\b(?:document|writ|summar|report)\w*/i],
+  ["Fetcher", /\bfetch\w*/i],
+  ["Deployer", /\b(?:deploy|release|ship)\w*/i],
+];
 
-  const fromId = nameFromAgentId(transcript.agentId);
-  if (fromId) return { name: fromId, source: "filename" };
+const ROLE_INTRO = /\b(?:you are|you're|act as|your role is|role)\s*[:,-]?\s*(?:an?|the)?\s*/i;
+const ROLE_STOP_WORDS = new Set([
+  "and", "by", "check", "checking", "conduct", "conducting", "for", "from",
+  "in", "map", "mapping", "on", "that", "the", "to", "validate", "validating",
+  "who", "with", "while",
+]);
 
-  const desc = spawn?.input?.description;
-  if (desc) return { name: desc, source: "description" };
+/** Normalize a supplied name into a short display label without exposing IDs. */
+function conciseName(value) {
+  if (typeof value !== "string") return null;
+  const text = value
+    .replace(/<[^>]*>/g, " ")
+    .replace(/[\/_-]+/g, " ")
+    .replace(/[#:]\s*/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/^\s*(?:an?|the)\s+/i, "")
+    .replace(/\s+#?\d+\s*$/, "")
+    .trim();
+  if (!text) return null;
 
-  const type = spawn?.input?.subagent_type;
-  if (type) return { name: type, source: "subagent_type" };
-
-  // Workflow agents carry no persisted label — the `label:` passed to agent()
-  // never reaches the transcript or the journal. Derive a role from the prompt.
-  const opening = unwrapTeammateMessage(firstUserText(transcript.records) || "").text;
-  const line = (opening || "")
-    .split("\n")
-    .map((l) => l.trim())
-    .find((l) => l.length > 0);
-  if (line) return { name: roleFromPrompt(line), source: "derived" };
-
-  return { name: transcript.agentId.slice(0, 9), source: "derived" };
+  return text
+    .split(" ")
+    .slice(0, MAX_NAME_WORDS)
+    .map((word) => /^[A-Z0-9]{2,6}$/.test(word) ? word : `${word[0].toUpperCase()}${word.slice(1).toLowerCase()}`)
+    .join(" ");
 }
 
-/**
- * "You are a Trader Source Worker digesting ONE source post..." -> "Trader Source Worker".
- * Role-style openings are overwhelmingly common in orchestrated prompts, so
- * pulling the role out beats truncating the raw sentence.
- */
-function roleFromPrompt(line) {
-  let s = line.replace(/^\s*(you are|act as|you're)\s+(a|an|the)?\s*/i, "");
-  // Cut at the first clause boundary — punctuation, or a trailing participle.
-  s = s.split(/[.,;:—]|\s+\bin a\b|\s+\bfor the\b|\s+\bwho\b|\s+\bthat\b/i)[0];
-  s = s.replace(/\s+(digesting|building|running|writing|analyzing|reviewing|checking)\b.*$/i, "");
-  s = s.trim();
-  if (!s) s = line;
-  return s.length > 40 ? s.slice(0, 39) + "…" : s;
+/** Extract a role phrase from prompts written as "You are the ...". */
+function rolePhraseForText(value) {
+  if (typeof value !== "string") return null;
+  const match = ROLE_INTRO.exec(value);
+  if (!match) return null;
+  const phrase = value.slice(match.index + match[0].length).split(/[.,;:\n—]/, 1)[0];
+  const words = phrase.trim().split(/\s+/);
+  const stop = words.findIndex((word) => ROLE_STOP_WORDS.has(word.toLowerCase().replace(/[^a-z]/g, "")));
+  return conciseName((stop >= 0 ? words.slice(0, stop) : words.slice(0, MAX_NAME_WORDS)).join(" "));
+}
+
+/** @returns {string|null} A concise, stable role label for transcript text. */
+function roleLabelForText(value) {
+  if (typeof value !== "string") return null;
+  const text = value.replace(/[_-]/g, " ");
+  for (const [label, pattern] of ROLE_LABELS) {
+    if (pattern.test(text)) return label;
+  }
+  return rolePhraseForText(value);
+}
+
+function resolveName(transcript, spawn) {
+  const opening = unwrapTeammateMessage(firstUserText(transcript.records) || "").text;
+  const explicitValue = spawn?.input?.name;
+  const explicit = /^[a-z0-9][a-z0-9_-]*$/.test(String(explicitValue || ""))
+    ? roleLabelForText(explicitValue) || conciseName(explicitValue)
+    : conciseName(explicitValue);
+  if (explicit) {
+    const source = /^[a-z0-9][a-z0-9_-]*$/.test(String(explicitValue || ""))
+      ? "role:explicit"
+      : "explicit";
+    return { name: explicit, source };
+  }
+
+  const fromId = nameFromAgentId(transcript.agentId);
+  if (fromId) {
+    const name = roleLabelForText(fromId) || conciseName(fromId);
+    if (name) return { name, source: "filename" };
+  }
+
+  const candidates = [
+    [opening, "prompt"],
+    [spawn?.input?.description, "description"],
+    // "Explore" and "general-purpose" are broad execution modes, not an
+    // agent's assignment. Use them only when the task text gives us nothing.
+    [spawn?.input?.subagent_type, "subagent_type"],
+  ];
+
+  for (const [value, source] of candidates) {
+    const name = roleLabelForText(value);
+    if (name) return { name, source: `role:${source}` };
+  }
+
+  // An unknown role is more honest and more useful than a UUID fragment or a
+  // task sentence. The prompt remains available in the detail drawer.
+  return { name: "Specialist", source: "role:fallback" };
 }
 
 // ── metrics ──────────────────────────────────────────────────────────────────
@@ -449,7 +516,7 @@ function buildRunGraph({ projectDir, sessionId, now = Date.now() }) {
         to: n.id,
         at: n.startedAt,
         kind: "prompt",
-        label: n.description || n.name,
+        label: n.name,
       });
     }
     const back = result?.timestamp || n.endedAt;
@@ -508,9 +575,8 @@ function breakCycles(nodes) {
 }
 
 /**
- * A fan-out spawns many agents from one prompt template, so derived names
- * collide constantly ("Trader Source Worker" x8). Number them in start order
- * so each row in the UI is still individually identifiable.
+ * Number only genuinely identical sibling names. Distinct semantic names are
+ * preserved, while an indistinguishable duplicate still remains identifiable.
  */
 function disambiguateSiblingNames(nodes) {
   const groups = new Map();
@@ -550,4 +616,4 @@ function rollUp(id, nodes, childrenOf) {
   return n.subtree;
 }
 
-module.exports = { buildRunGraph, rollUp, ROOT, STALE_MS };
+module.exports = { buildRunGraph, resolveName, rollUp, roleLabelForText, ROOT, STALE_MS };

@@ -17,6 +17,7 @@ const path = require("path");
 const { URL } = require("url");
 
 const { buildRunGraph } = require("./lib/graph");
+const { sessionTitleFromFile } = require("./lib/transcript");
 const { watchSession } = require("./lib/watcher");
 const {
   listAllSessions,
@@ -27,6 +28,7 @@ const {
 
 const PORT = Number(process.env.AGENT_MAP_PORT || 4830);
 const CLIENT_DIR = path.join(__dirname, "..", "client");
+const sessionTitleCache = new Map();
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -34,7 +36,38 @@ const MIME = {
   ".css": "text/css; charset=utf-8",
   ".svg": "image/svg+xml",
   ".json": "application/json; charset=utf-8",
+  ".woff2": "font/woff2",
 };
+
+/** A cheap static-client fingerprint used only to refresh a local dev page after edits. */
+function clientVersion() {
+  let files = 0;
+  let newest = 0;
+  const walk = (dir) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const file = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(file);
+        continue;
+      }
+      try {
+        const stat = fs.statSync(file);
+        files++;
+        newest = Math.max(newest, stat.mtimeMs);
+      } catch {
+        /* raced with an editor write */
+      }
+    }
+  };
+  walk(CLIENT_DIR);
+  return `${files}:${Math.round(newest)}`;
+}
 
 function sendJson(res, status, body) {
   const payload = JSON.stringify(body);
@@ -77,6 +110,7 @@ function sessionsPayload() {
   const shape = (s, live) => ({
     sessionId: s.sessionId,
     project: s.project,
+    title: titleForSession(s),
     updatedAt: new Date(s.newestMtimeMs || s.mtimeMs).toISOString(),
     sizeBytes: s.sizeBytes,
     hasSubagents: s.hasSubagents,
@@ -88,6 +122,17 @@ function sessionsPayload() {
     active: active.map((s) => shape(s, true)),
     recent: recent.map((s) => shape(s, false)),
   };
+}
+
+/** Cache bounded title probes; the sidebar refreshes every 15 seconds. */
+function titleForSession(session) {
+  const fingerprint = `${session.mtimeMs}:${session.sizeBytes}`;
+  const cached = sessionTitleCache.get(session.file);
+  if (cached?.fingerprint === fingerprint) return cached.title;
+
+  const title = sessionTitleFromFile(session.file);
+  sessionTitleCache.set(session.file, { fingerprint, title });
+  return title;
 }
 
 function handleLive(req, res, sessionId) {
@@ -138,6 +183,7 @@ const server = http.createServer((req, res) => {
 
   try {
     if (p === "/api/sessions") return sendJson(res, 200, sessionsPayload());
+    if (p === "/api/app-version") return sendJson(res, 200, { version: clientVersion() });
 
     if (p.startsWith("/api/runs/")) {
       const id = decodeURIComponent(p.slice("/api/runs/".length));

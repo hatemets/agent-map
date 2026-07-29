@@ -44,12 +44,18 @@
 - Keep provenance visible where it affects trust (`inferred`, naming source,
   unpriced model). A UI cannot honestly claim precision the parser does not
   possess.
+- Agent-node titles are human-readable names of at most four words. Preserve an
+  explicit semantic name such as `Reconnaissance Agent`; otherwise derive a
+  concise role from the prompt or description. Never promote an entire spawn
+  description or prompt sentence into a title. Number only truly identical
+  sibling names, and preserve the complete task prompt in detail data.
 
 ## Discovery and Watcher
 
-- Discovery scans must be metadata-only (`readdir`/`stat`) until a run is
-  explicitly selected. Do not parse every historic transcript to populate the
-  sidebar.
+- Discovery scans are metadata-only (`readdir`/`stat`) until a run is selected.
+  The sidebar may make one cached, bounded prefix probe of each displayed root
+  transcript solely to show the opening-request title; never fully parse every
+  historic transcript to populate the sidebar.
 - Every filesystem traversal must tolerate races: missing directories, deleted
   files, permissions changes, and partial session directories produce an empty
   or incomplete result, not a server crash.
@@ -78,7 +84,7 @@
 - Bind to `127.0.0.1` unless public/network access is an explicit product
   requirement with its own authentication and threat model.
 - API responses are JSON with no-store caching. Keep the public surface small:
-  sessions, one run, and one-way live updates.
+  sessions, one run, one static-client version, and one-way live updates.
 - Decode and validate a session identifier once at the API boundary; resolve it
   only through `findSession`, never by joining arbitrary input into a file path.
 - Static serving must remain contained inside `client/`. Test path traversal if

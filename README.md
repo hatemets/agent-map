@@ -77,9 +77,10 @@ is a worse bug than a mis-parented one.
 ### Known limitations
 
 - **Workflow agent labels are not persisted.** The `label:` passed to `agent()`
-  never reaches the transcript or the journal, so those agents get a role name
-  derived from their prompt (`"You are a Trader Source Worker…"` →
-  `Trader Source Worker #3`). Regular `Agent`/`Task` subagents have real names.
+  may never reach the transcript or journal, so Agent Map preserves explicit
+  persisted names when available and otherwise derives a human-readable role
+  of at most four words from the prompt. Identical fan-out roles still receive
+  a numeric suffix because the source contains no distinguishing name.
 - Cost uses published list prices and assumes the standard service tier.
 
 ---

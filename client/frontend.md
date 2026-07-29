@@ -27,6 +27,8 @@
   disappeared or changed identity, close or refresh the drawer deliberately.
 - Render functions should be deterministic from the graph and current UI state.
   Do not maintain a second, mutable hierarchy or metric cache in a view.
+- The local dev page polls its static-source version and reloads after an edit.
+  Keep that probe best-effort and separate from live-run connection status.
 - Escape untrusted transcript-derived text by assigning it through `textContent`
   or SVG text nodes. Never interpolate prompts, project names, agent names, or
   activity into `innerHTML`.
@@ -61,9 +63,9 @@
 ## Design System
 
 - The established direction is a dense, calm instrument panel: warm near-black
-  surfaces, slab-serif identity, monospaced telemetry, and restrained signal
-  colors. Extend it; do not introduce dashboard-template gradients, random
-  rounded cards, or a second visual language.
+  surfaces, self-hosted Inter for all UI copy, monospaced telemetry, and
+  restrained signal colors. Inter is bundled under the SIL Open Font License;
+  do not replace it with Apple system fonts or a remote font request.
 - Use the existing CSS custom properties for colors, typography, rail/drawer
   dimensions, and status/model colors. Add a token before scattering a repeated
   literal.

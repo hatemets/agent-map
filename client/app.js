@@ -11,8 +11,13 @@ const state = {
   source: null,
   transform: { x: 0, y: 0, k: 1 },
   fitPending: false,
+  autoFit: true,
+  topologyKey: null,
   focusDrawer: false,
   restoreAgentId: null,
+  appVersion: null,
+  collapsedProjects: new Set(),
+  projectDisclosureInitialized: false,
 };
 
 // ── formatting ────────────────────────────────────────────────────────────
@@ -24,6 +29,9 @@ const fmtUsd = (n) =>
   n == null ? "—" : n >= 10 ? `$${n.toFixed(2)}` : n >= 0.01 ? `$${n.toFixed(2)}` : `$${n.toFixed(4)}`;
 
 const fmtCost = (n, unpriced = false) => (unpriced ? "unpriced" : fmtUsd(n));
+
+/** Normalizes activity emitted by an older in-memory server during hot reload. */
+const displayActivity = (activity) => String(activity || "").replace(/\s*—\s*/g, ": ");
 
 function fmtDur(ms) {
   if (!Number.isFinite(ms) || ms < 0) return "—";
@@ -99,7 +107,7 @@ function makeAgentInteractive(g, agent) {
     "aria-label",
     `${agent.name}, ${agent.status}, ${modelShort(agent.model)}, ${fmtTokens(agent.tokens.total)} tokens`,
   );
-  g.appendChild(el("title", {}, `${agent.name} — ${agent.activity || agent.status}`));
+  g.appendChild(el("title", {}, `${agent.name}: ${displayActivity(agent.activity || agent.status)}`));
   g.addEventListener("click", (event) => {
     if (suppressCanvasClick) return;
     event.stopPropagation();
@@ -156,81 +164,121 @@ function timeExtent(graph, order) {
 // ── view: tree ────────────────────────────────────────────────────────────
 
 const NODE_W = 252;
-const NODE_H = 56;
-const COL = 300;
-const ROW = 70;
+const NODE_H = 64;
+const TREE_GAP_X = 36;
+const TREE_GAP_Y = 86;
+const FANOUT_GAP_X = 12;
 
 function renderTree(graph, root) {
   const { order, kids } = orderedAgents(graph);
-  const pos = new Map();
-  let cursor = 0;
-
-  const layout = (node) => {
-    const children = kids.get(node.id) || [];
-    if (!children.length) {
-      pos.set(node.id, { x: node.depth * COL, y: cursor++ * ROW });
-      return;
-    }
-    children.forEach(layout);
-    const first = pos.get(children[0].id).y;
-    const last = pos.get(children[children.length - 1].id).y;
-    pos.set(node.id, { x: node.depth * COL, y: (first + last) / 2 });
-  };
-  if (order.length) layout(order[0]);
-  // Any agent the walk missed still needs a slot.
-  for (const a of order) if (!pos.has(a.id)) pos.set(a.id, { x: a.depth * COL, y: cursor++ * ROW });
+  const { pos, metrics } = topDownLayout(order, kids);
 
   const links = el("g");
-  for (const a of order) {
-    if (!a.parentId || !pos.has(a.parentId)) continue;
-    const p = pos.get(a.parentId);
-    const c = pos.get(a.id);
-    const x1 = p.x + NODE_W;
-    const y1 = p.y + NODE_H / 2;
-    const x2 = c.x;
-    const y2 = c.y + NODE_H / 2;
-    const mid = x1 + (x2 - x1) / 2;
+  for (const agent of order) {
+    if (!agent.parentId || !pos.has(agent.parentId)) continue;
+    const parent = pos.get(agent.parentId);
+    const child = pos.get(agent.id);
+    const parentMetric = metrics.get(agent.parentId);
+    const childMetric = metrics.get(agent.id);
+    const startY = parent.y + parentMetric.h / 2;
+    const endY = child.y - childMetric.h / 2;
+    const channelY = startY + (endY - startY) / 2;
     links.appendChild(
       el("path", {
-        class: `link${a.inferred ? " inferred" : ""}`,
-        d: `M${x1},${y1} C${mid},${y1} ${mid},${y2} ${x2},${y2}`,
+        class: `link${agent.inferred ? " inferred" : ""}`,
+        d: `M${parent.x},${startY} V${channelY} H${child.x} V${endY}`,
       }),
     );
   }
   root.appendChild(links);
 
-  for (const a of order) {
-    const { x, y } = pos.get(a.id);
+  for (const agent of order) {
+    const point = pos.get(agent.id);
+    const metric = metrics.get(agent.id);
     const g = el("g", {
-      class: `node${a.id === state.selectedId ? " sel" : ""}`,
-      transform: `translate(${x},${y})`,
+      class: `node${metric.compact ? " compact" : ""}${agent.id === state.selectedId ? " sel" : ""}`,
+      transform: `translate(${point.x - metric.w / 2},${point.y - metric.h / 2})`,
     });
-    makeAgentInteractive(g, a);
-    g.appendChild(el("rect", { class: "node-card", width: NODE_W, height: NODE_H }));
-    // Model identity as a coloured spine on the left edge of the card.
-    g.appendChild(
-      el("rect", { x: 0, y: 0, width: 3, height: NODE_H, fill: modelColor(a.model), rx: 1.5 }),
-    );
+    makeAgentInteractive(g, agent);
+    g.appendChild(el("rect", { class: "node-card", width: metric.w, height: metric.h }));
     g.appendChild(
       el("circle", {
-        cx: 15,
-        cy: 15,
+        cx: metric.compact ? 11 : 15,
+        cy: metric.compact ? metric.h / 2 : 17,
         r: 3.5,
-        fill: statusColor(a.status),
-        class: a.status === "running" ? "bar running" : null,
+        fill: statusColor(agent.status),
+        class: agent.status === "running" ? "bar running" : null,
       }),
     );
-    g.appendChild(el("text", { class: "node-name", x: 26, y: 19 }, clip(a.name, 27)));
-    g.appendChild(el("text", { class: "node-activity", x: 12, y: 35 }, clip(a.activity, 36)));
-    g.appendChild(
-      el(
-        "text",
-        { class: "node-meta", x: 12, y: 49 },
-        `${modelShort(a.model)} · ${fmtTokens(a.tokens.total)} · ${fmtCost(a.costUsd, a.unpricedModel)}`,
-      ),
-    );
+    if (metric.compact) {
+      g.appendChild(el("text", { class: "node-name", x: 20, y: metric.h / 2 + 4 }, clip(agent.name, metric.labelChars)));
+    } else {
+      g.appendChild(el("text", { class: "node-name", x: 26, y: 22 }, clip(agent.name, 27)));
+      g.appendChild(el("text", { class: "node-activity", x: 12, y: 42 }, clip(displayActivity(agent.activity), 36)));
+      g.appendChild(
+        el(
+          "text",
+          { class: "node-meta", x: 12, y: 57 },
+          `${modelShort(agent.model)} · ${fmtTokens(agent.tokens.total)} · ${fmtCost(agent.costUsd, agent.unpricedModel)}`,
+        ),
+      );
+    }
     root.appendChild(g);
   }
+}
+
+/**
+ * Lay the graph out top-down. A large root-level leaf fan-out uses one compact
+ * row so each edge gets its own vertical terminal and stays visible.
+ */
+function topDownLayout(order, kids) {
+  const root = order.find((agent) => !agent.parentId);
+  const children = root ? kids.get(root.id) || [] : [];
+  const metrics = new Map(order.map((agent) => [agent.id, { w: NODE_W, h: NODE_H, compact: false, labelChars: 27 }]));
+  const pos = new Map();
+  const fanout = children.length >= 4 && children.every((agent) => !(kids.get(agent.id) || []).length);
+
+  if (fanout) {
+    const rect = canvas.getBoundingClientRect();
+    const available = Math.max(1, rect.width * 0.8 - (children.length - 1) * FANOUT_GAP_X);
+    const width = Math.max(92, Math.min(174, available / children.length));
+    const height = 48;
+    for (const child of children) {
+      metrics.set(child.id, {
+        w: width,
+        h: height,
+        compact: true,
+        labelChars: Math.max(10, Math.floor((width - 20) / 6.2)),
+      });
+    }
+    const firstX = width / 2;
+    children.forEach((child, index) => {
+      pos.set(child.id, { x: firstX + index * (width + FANOUT_GAP_X), y: NODE_H + TREE_GAP_Y + height / 2 });
+    });
+    pos.set(root.id, {
+      x: (pos.get(children[0].id).x + pos.get(children[children.length - 1].id).x) / 2,
+      y: NODE_H / 2,
+    });
+    return { pos, metrics };
+  }
+
+  let leaf = 0;
+  const layout = (agent) => {
+    const descendants = kids.get(agent.id) || [];
+    if (!descendants.length) {
+      pos.set(agent.id, { x: leaf++ * (NODE_W + TREE_GAP_X), y: agent.depth * (NODE_H + TREE_GAP_Y) });
+      return;
+    }
+    descendants.forEach(layout);
+    const first = pos.get(descendants[0].id).x;
+    const last = pos.get(descendants[descendants.length - 1].id).x;
+    pos.set(agent.id, { x: (first + last) / 2, y: agent.depth * (NODE_H + TREE_GAP_Y) });
+  };
+  if (root) layout(root);
+  for (const agent of order) {
+    if (!pos.has(agent.id)) pos.set(agent.id, { x: leaf++ * (NODE_W + TREE_GAP_X), y: agent.depth * (NODE_H + TREE_GAP_Y) });
+  }
+  return { pos, metrics };
 }
 
 // ── view: timeline ────────────────────────────────────────────────────────
@@ -305,43 +353,55 @@ function renderTimeline(graph, root) {
 
 // ── view: sequence ────────────────────────────────────────────────────────
 
-const SEQ_LANE = 132;
 const SEQ_TOP = 70;
+const SEQ_GUTTER = 74;
+const SEQ_ROW_H = 42;
 
 function renderSequence(graph, root) {
   const { order } = orderedAgents(graph);
-  const [t0, t1] = timeExtent(graph, order);
-  // Match the lifeline height to the viewport for the same reason as the
-  // timeline — a fixed 1100px drawing gets scaled into illegibility.
-  const SEQ_H = Math.max(560, canvas.getBoundingClientRect().height - SEQ_TOP - 90);
-  const colOf = new Map(order.map((a, i) => [a.id, 40 + i * SEQ_LANE]));
-  const y = (t) => SEQ_TOP + ((t - t0) / (t1 - t0)) * SEQ_H;
+  const [t0] = timeExtent(graph, order);
+  const messages = graph.messages
+    .map((message, index) => ({ ...message, index, time: Date.parse(message.at) }))
+    .filter((message) => Number.isFinite(message.time))
+    .sort((a, b) => a.time - b.time || a.index - b.index);
+  const rect = canvas.getBoundingClientRect();
+  const availableWidth = Math.max(620, rect.width - SEQ_GUTTER - 36);
+  const laneGap = order.length > 1
+    ? Math.max(148, availableWidth / (order.length - 1))
+    : 170;
+  const drawingWidth = SEQ_GUTTER + Math.max(1, order.length - 1) * laneGap + 24;
+  const headerWidth = Math.min(168, Math.max(132, laneGap - 16));
+  const sequenceHeight = Math.max(
+    460,
+    messages.length * SEQ_ROW_H + 46,
+    rect.height - SEQ_TOP - 92,
+  );
+  const colOf = new Map(order.map((agent, index) => [agent.id, SEQ_GUTTER + index * laneGap]));
 
   // Lifelines + headers.
   order.forEach((a) => {
     const x = colOf.get(a.id);
     root.appendChild(
-      el("line", { class: "lifeline", x1: x, y1: SEQ_TOP, x2: x, y2: SEQ_TOP + SEQ_H }),
+      el("line", { class: "lifeline", x1: x, y1: SEQ_TOP, x2: x, y2: SEQ_TOP + sequenceHeight }),
     );
-    const g = el("g", { class: "node", transform: `translate(${x - 59},0)` });
+    const g = el("g", { class: "node sequence-head", transform: `translate(${x - headerWidth / 2},0)` });
     makeAgentInteractive(g, a);
-    g.appendChild(el("rect", { class: "node-card", width: 118, height: 44 }));
+    g.appendChild(el("rect", { class: "node-card", width: headerWidth, height: 50 }));
     g.appendChild(
-      el("rect", { x: 0, y: 0, width: 3, height: 44, fill: modelColor(a.model), rx: 1.5 }),
+      el("rect", { x: 0, y: 0, width: 4, height: 50, fill: modelColor(a.model), rx: 2 }),
     );
-    g.appendChild(el("text", { class: "node-name", x: 10, y: 19 }, clip(a.name, 13)));
-    g.appendChild(el("text", { class: "node-meta", x: 10, y: 34 }, modelShort(a.model)));
+    g.appendChild(el("text", { class: "node-name", x: 12, y: 21 }, clip(a.name, Math.floor((headerWidth - 20) / 7))));
+    g.appendChild(el("text", { class: "node-meta", x: 12, y: 38 }, modelShort(a.model)));
     root.appendChild(g);
   });
 
-  // Messages: prompts down the tree, results back up.
-  for (const m of graph.messages) {
+  // Timestamp collisions are common around dispatch/result records. Give every
+  // event a chronological row, and preserve real timing in the left gutter.
+  messages.forEach((m, index) => {
     const x1 = colOf.get(m.from);
     const x2 = colOf.get(m.to);
-    if (x1 === undefined || x2 === undefined) continue;
-    const at = Date.parse(m.at);
-    if (!Number.isFinite(at)) continue;
-    const yy = y(at);
+    if (x1 === undefined || x2 === undefined) return;
+    const yy = SEQ_TOP + 28 + index * SEQ_ROW_H;
     const color =
       m.kind === "error"
         ? CSSVAR("--fail")
@@ -349,7 +409,12 @@ function renderSequence(graph, root) {
           ? CSSVAR("--ink-faint")
           : CSSVAR("--m-opus");
     const dir = x2 > x1 ? 1 : -1;
-    root.appendChild(
+    const row = el("g", { class: `message-row ${m.kind || "prompt"}` });
+    row.appendChild(el("title", {}, `${m.label || m.kind || "message"} · ${fmtDur(m.time - t0)}`));
+    row.appendChild(
+      el("text", { class: "msg-time", x: 8, y: yy + 3 }, `${String(index + 1).padStart(2, "0")}  +${fmtDur(Math.max(0, m.time - t0))}`),
+    );
+    row.appendChild(
       el("path", {
         class: "msg-line",
         d: `M${x1},${yy} L${x2 - dir * 6},${yy}`,
@@ -357,20 +422,38 @@ function renderSequence(graph, root) {
         "stroke-dasharray": m.kind === "prompt" ? null : "4 3",
       }),
     );
-    root.appendChild(
+    row.appendChild(
+      el("circle", { class: "msg-origin", cx: x1, cy: yy, r: 2.5, fill: color }),
+    );
+    row.appendChild(
       el("path", {
         d: `M${x2},${yy} l${-dir * 6},-3.5 l0,7 z`,
         fill: color,
       }),
     );
-    root.appendChild(
+    const rawLabel = m.kind === "result" ? "Returned" : m.kind === "error" ? (m.label || "Failed") : m.label;
+    const label = clip(rawLabel || "Message", 28);
+    const labelWidth = Math.min(176, Math.max(58, label.length * 5.3 + 18));
+    const labelX = (x1 + x2) / 2;
+    row.appendChild(
+      el("rect", {
+        class: "msg-label-bg",
+        x: labelX - labelWidth / 2,
+        y: yy - 14,
+        width: labelWidth,
+        height: 20,
+        rx: 5,
+      }),
+    );
+    row.appendChild(
       el(
         "text",
-        { class: "msg-text", x: (x1 + x2) / 2, y: yy - 5, "text-anchor": "middle" },
-        clip(m.label, 22),
+        { class: `msg-text ${m.kind || "prompt"}`, x: labelX, y: yy, "text-anchor": "middle" },
+        label,
       ),
     );
-  }
+    root.appendChild(row);
+  });
 }
 
 // ── pan / zoom ────────────────────────────────────────────────────────────
@@ -384,7 +467,41 @@ function applyTransform() {
   viewport.setAttribute("transform", `translate(${x},${y}) scale(${k})`);
 }
 
-function fit() {
+let transformFrame = null;
+
+function stopTransformAnimation() {
+  if (transformFrame !== null) cancelAnimationFrame(transformFrame);
+  transformFrame = null;
+}
+
+function setTransform(next, { animate = false } = {}) {
+  stopTransformAnimation();
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (!animate || reduced) {
+    state.transform = next;
+    applyTransform();
+    return;
+  }
+
+  const from = { ...state.transform };
+  const startedAt = performance.now();
+  const duration = 220;
+  const step = (now) => {
+    const progress = Math.min(1, (now - startedAt) / duration);
+    const eased = 1 - (1 - progress) ** 3;
+    state.transform = {
+      x: from.x + (next.x - from.x) * eased,
+      y: from.y + (next.y - from.y) * eased,
+      k: from.k + (next.k - from.k) * eased,
+    };
+    applyTransform();
+    if (progress < 1) transformFrame = requestAnimationFrame(step);
+    else transformFrame = null;
+  };
+  transformFrame = requestAnimationFrame(step);
+}
+
+function fit({ animate = true } = {}) {
   let box;
   try {
     box = viewport.getBBox();
@@ -393,32 +510,31 @@ function fit() {
   }
   if (!box || !box.width || !box.height) return;
   const r = canvas.getBoundingClientRect();
-  const pad = 40;
-
-  // A wide fan-out (40+ siblings) is thousands of pixels tall. Scaling that to
-  // fit would shrink every card into an unreadable sliver, so clamp the zoom
-  // and let the overflowing axis be panned instead.
-  const MIN_K = 0.6;
+  const padX = r.width * 0.1;
+  const padY = r.height * 0.1;
   const raw = Math.min(
-    (r.width - pad * 2) / box.width,
-    (r.height - pad * 2) / box.height,
+    (r.width - padX * 2) / box.width,
+    (r.height - padY * 2) / box.height,
   );
-  const k = Math.min(1.15, Math.max(MIN_K, raw));
+  const k = Math.max(0.08, raw);
 
-  const fitsX = box.width * k <= r.width - pad * 2;
-  const fitsY = box.height * k <= r.height - pad * 2;
-  state.transform = {
+  const fitsX = box.width * k <= r.width - padX * 2;
+  const fitsY = box.height * k <= r.height - padY * 2;
+  setTransform({
     k,
-    x: fitsX ? pad - box.x * k + (r.width - pad * 2 - box.width * k) / 2 : pad - box.x * k,
-    y: fitsY ? pad - box.y * k + (r.height - pad * 2 - box.height * k) / 2 : pad - box.y * k,
-  };
-  applyTransform();
+    x: fitsX ? padX - box.x * k + (r.width - padX * 2 - box.width * k) / 2 : padX - box.x * k,
+    y: fitsY ? padY - box.y * k + (r.height - padY * 2 - box.height * k) / 2 : padY - box.y * k,
+  }, { animate });
 }
 
 let drag = null;
 let suppressCanvasClick = false;
 canvas.addEventListener("pointerdown", (e) => {
   if (e.button !== 0) return;
+  // A node is a control, not a pan handle. Starting a canvas drag here made a
+  // barely perceptible trackpad movement suppress the node's click event.
+  if (e.target.closest?.("[data-agent-id]")) return;
+  stopTransformAnimation();
   drag = {
     pointerId: e.pointerId,
     x: e.clientX,
@@ -432,7 +548,10 @@ canvas.addEventListener("pointerdown", (e) => {
 });
 canvas.addEventListener("pointermove", (e) => {
   if (!drag || drag.pointerId !== e.pointerId) return;
-  if (Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y) > 3) drag.moved = true;
+  if (Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y) > 3) {
+    drag.moved = true;
+    state.autoFit = false;
+  }
   state.transform.x = drag.tx + (e.clientX - drag.x);
   state.transform.y = drag.ty + (e.clientY - drag.y);
   applyTransform();
@@ -455,6 +574,8 @@ canvas.addEventListener(
     const mx = e.clientX - r.left;
     const my = e.clientY - r.top;
     const factor = Math.exp(-e.deltaY * 0.0015);
+    stopTransformAnimation();
+    state.autoFit = false;
     const k = Math.min(3, Math.max(0.08, state.transform.k * factor));
     // Keep the point under the cursor anchored while zooming.
     state.transform.x = mx - ((mx - state.transform.x) * k) / state.transform.k;
@@ -472,10 +593,15 @@ canvas.addEventListener("click", () => {
   }
   select(null);
 });
-document.getElementById("fit").addEventListener("click", fit);
+document.getElementById("fit").addEventListener("click", () => {
+  state.autoFit = true;
+  fit();
+});
 
 function zoomBy(factor) {
   if (!state.graph) return;
+  stopTransformAnimation();
+  state.autoFit = false;
   const r = canvas.getBoundingClientRect();
   const mx = r.width / 2;
   const my = r.height / 2;
@@ -505,7 +631,7 @@ function render() {
 
   if (state.fitPending) {
     state.fitPending = false;
-    requestAnimationFrame(fit);
+    requestAnimationFrame(() => fit());
   } else {
     applyTransform();
   }
@@ -652,10 +778,17 @@ document.getElementById("drawer-close").addEventListener("click", () => select(n
 
 // ── sessions + live feed ──────────────────────────────────────────────────
 
-function sessionButton(s, index) {
+/** Project-directory slugs encode the path; the project tail is the useful label. */
+function projectName(project) {
+  const marker = "-projects-";
+  const at = project.lastIndexOf(marker);
+  const tail = at >= 0 ? project.slice(at + marker.length) : project.replace(/^-/, "");
+  return tail || "unknown project";
+}
+
+function sessionButton(s) {
   const li = document.createElement("li");
   const b = document.createElement("button");
-  b.dataset.index = String(index + 1).padStart(2, "0");
   if (s.sessionId === state.sessionId) b.classList.add("on");
 
   const copy = document.createElement("span");
@@ -663,18 +796,12 @@ function sessionButton(s, index) {
 
   const proj = document.createElement("span");
   proj.className = "proj";
-  const projectPath = s.project.replace(/^-/, "").replace(/-/g, "/");
-  proj.textContent = projectPath.includes("/projects/")
-    ? projectPath.split("/projects/").pop()
-    : projectPath.split("/").filter(Boolean).pop() || "unknown project";
+  const title = s.title || "No opening request";
+  proj.textContent = title;
+  b.setAttribute("aria-label", `${projectName(s.project)}: ${title}. Session ${s.sessionId.slice(0, 8)}`);
 
   const when = document.createElement("span");
   when.className = "when";
-  if (s.live) {
-    const dot = document.createElement("i");
-    dot.className = "live-dot";
-    when.appendChild(dot);
-  }
   when.append(document.createTextNode(`${fmtAgo(s.updatedAt)} · ${s.sessionId.slice(0, 8)}`));
   if (s.hasSubagents) {
     const agents = document.createElement("span");
@@ -685,9 +812,86 @@ function sessionButton(s, index) {
 
   copy.append(proj, when);
   b.appendChild(copy);
+  if (s.live) {
+    const dot = document.createElement("i");
+    dot.className = "live-dot";
+    dot.setAttribute("aria-hidden", "true");
+    b.appendChild(dot);
+  }
   b.addEventListener("click", () => openSession(s.sessionId));
   li.appendChild(b);
   return li;
+}
+
+/** A stable two-state icon avoids the layout shift of the old CSS folder. */
+function projectFolderIcon() {
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("class", "project-folder");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+
+  const closed = document.createElementNS(NS, "path");
+  closed.setAttribute("class", "folder-closed");
+  closed.setAttribute("d", "M3.75 6.75A1.75 1.75 0 0 1 5.5 5h4.1l2 2h6.9a1.75 1.75 0 0 1 1.75 1.75v8.75a1.75 1.75 0 0 1-1.75 1.75h-13a1.75 1.75 0 0 1-1.75-1.75Z");
+
+  const open = document.createElementNS(NS, "path");
+  open.setAttribute("class", "folder-open");
+  open.setAttribute("d", "M3.75 8.25v-.5A1.75 1.75 0 0 1 5.5 6h4.1l2 2h7.25c1.2 0 2.04 1.17 1.66 2.31l-2.25 6.75a1.75 1.75 0 0 1-1.66 1.19H5.4a1.75 1.75 0 0 1-1.66-2.3l2.05-6.16A1.75 1.75 0 0 1 7.45 8.6h11.9");
+  svg.append(closed, open);
+  return svg;
+}
+
+/** Render sessions in project buckets, preserving the API's newest-first order. */
+function groupedSessionBlocks(sessions, bucket) {
+  const byProject = new Map();
+  for (const session of sessions) {
+    const name = projectName(session.project);
+    if (!byProject.has(name)) byProject.set(name, []);
+    byProject.get(name).push(session);
+  }
+
+  return [...byProject].map(([project, runs]) => {
+    const projectKey = `${bucket}:${project}`;
+    const collapsed = state.collapsedProjects.has(projectKey);
+    const selected = runs.some((run) => run.sessionId === state.sessionId);
+    const group = document.createElement("li");
+    group.className = `project-group${collapsed ? " collapsed" : ""}${selected ? " selected-project" : ""}`;
+
+    const heading = document.createElement("button");
+    heading.className = "project-heading";
+    heading.type = "button";
+    heading.setAttribute("aria-expanded", String(!collapsed));
+    heading.setAttribute("aria-controls", `project-runs-${bucket}-${projectKey.replace(/[^a-z0-9]+/gi, "-")}`);
+    heading.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${project}, ${runs.length} ${runs.length === 1 ? "run" : "runs"}`);
+    const title = document.createElement("span");
+    title.className = "project-title";
+    const folder = projectFolderIcon();
+    const name = document.createElement("h3");
+    name.textContent = project;
+    const count = document.createElement("span");
+    count.className = "project-count";
+    count.textContent = `${runs.length} ${runs.length === 1 ? "run" : "runs"}`;
+    title.append(folder, name);
+    heading.append(title, count);
+    heading.addEventListener("click", () => {
+      if (state.collapsedProjects.has(projectKey)) state.collapsedProjects.delete(projectKey);
+      else state.collapsedProjects.add(projectKey);
+      const isCollapsed = state.collapsedProjects.has(projectKey);
+      group.classList.toggle("collapsed", isCollapsed);
+      heading.setAttribute("aria-expanded", String(!isCollapsed));
+      heading.setAttribute("aria-label", `${state.collapsedProjects.has(projectKey) ? "Expand" : "Collapse"} ${project}, ${runs.length} ${runs.length === 1 ? "run" : "runs"}`);
+    });
+
+    const reveal = document.createElement("div");
+    reveal.className = "project-runs-reveal";
+    const list = document.createElement("ul");
+    list.className = "project-runs";
+    list.id = heading.getAttribute("aria-controls");
+    list.replaceChildren(...runs.map(sessionButton));
+    reveal.appendChild(list);
+    group.append(heading, reveal);
+    return group;
+  });
 }
 
 async function loadSessions() {
@@ -706,14 +910,32 @@ async function loadSessions() {
   }
   const activeList = document.getElementById("sessions-active");
   const recentList = document.getElementById("sessions-recent");
-  activeList.replaceChildren(...data.active.map(sessionButton));
-  recentList.replaceChildren(...data.recent.map(sessionButton));
+  const autoOpen = !state.sessionId && data.active.length ? data.active[0].sessionId : null;
+  if (autoOpen) state.sessionId = autoOpen;
+  if (!state.projectDisclosureInitialized) {
+    for (const [bucket, sessions] of [["active", data.active], ["recent", data.recent]]) {
+      const projects = new Map();
+      for (const session of sessions) {
+        const name = projectName(session.project);
+        if (!projects.has(name)) projects.set(name, []);
+        projects.get(name).push(session);
+      }
+      for (const [project, runs] of projects) {
+        if (!runs.some((run) => run.sessionId === state.sessionId)) {
+          state.collapsedProjects.add(`${bucket}:${project}`);
+        }
+      }
+    }
+    state.projectDisclosureInitialized = true;
+  }
+  activeList.replaceChildren(...groupedSessionBlocks(data.active, "active"));
+  recentList.replaceChildren(...groupedSessionBlocks(data.recent, "recent"));
   document.getElementById("active-count").textContent = String(data.active.length).padStart(2, "0");
   document.getElementById("recent-count").textContent = String(data.recent.length).padStart(2, "0");
   document.getElementById("active-empty").hidden = data.active.length > 0;
 
   // Auto-open the newest live session on first load.
-  if (!state.sessionId && data.active.length) openSession(data.active[0].sessionId);
+  if (autoOpen) openSession(autoOpen);
 }
 
 function setConn(on, label, kind = "") {
@@ -736,10 +958,29 @@ function showPlaceholder(index, title, copy, error = false) {
   document.getElementById("placeholder-copy").textContent = copy;
 }
 
+/** Reload the local dashboard when its static source files change on disk. */
+async function checkAppVersion() {
+  try {
+    const response = await fetch("/api/app-version", { cache: "no-store" });
+    if (!response.ok) return;
+    const { version } = await response.json();
+    if (typeof version !== "string") return;
+    if (state.appVersion && state.appVersion !== version) {
+      window.location.reload();
+      return;
+    }
+    state.appVersion = version;
+  } catch {
+    // The normal session feed owns connection status; source polling is best-effort.
+  }
+}
+
 function openSession(sessionId) {
   if (state.source) state.source.close();
   state.sessionId = sessionId;
   state.selectedId = null;
+  state.autoFit = true;
+  state.topologyKey = null;
   state.fitPending = true;
   setConn(false, "connecting");
 
@@ -766,6 +1007,14 @@ function openSession(sessionId) {
       setConn(false, "empty", "warn");
       return;
     }
+    const topologyKey = g.agents
+      .map((agent) => `${agent.id}:${agent.parentId || ""}`)
+      .sort()
+      .join("|");
+    if (state.autoFit && state.topologyKey && state.topologyKey !== topologyKey) {
+      state.fitPending = true;
+    }
+    state.topologyKey = topologyKey;
     state.graph = g;
     setConn(g.status === "running", g.status === "running" ? "live" : "connected");
     render();
@@ -817,8 +1066,24 @@ tabs.slice(1).forEach((tab) => tab.setAttribute("tabindex", "-1"));
 
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") select(null);
-  if (e.key.toLowerCase() === "f" && !e.metaKey && !e.ctrlKey && !e.altKey) fit();
+  if (e.key.toLowerCase() === "f" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    state.autoFit = true;
+    fit();
+  }
 });
 
+let resizeFrame = null;
+new ResizeObserver(() => {
+  if (!state.graph || !state.autoFit) return;
+  if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
+  resizeFrame = requestAnimationFrame(() => {
+    resizeFrame = null;
+    state.fitPending = true;
+    render();
+  });
+}).observe(canvas);
+
 loadSessions();
+checkAppVersion();
 setInterval(loadSessions, 15000);
+setInterval(checkAppVersion, 1500);
